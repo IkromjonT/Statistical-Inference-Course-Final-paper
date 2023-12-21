@@ -1,0 +1,347 @@
+---
+title: "Pre-analysis Plan Draft"
+author: "Ikromjon Tuhtasunov"
+output: pdf_document
+date: '`r format(Sys.Date(), "%B %d, %Y")`'
+format:
+  pdf:
+    number-sections: true
+    colorlinks: true
+    cite-method: biblatex
+    keep-tex: true
+    monofontoptions: "Scale=0.7"
+    include-in-header:
+      include-in-header.tex
+fontsize: 10pt
+geometry: margin=1in
+graphics: yes
+documentclass: article
+subtitle: "Participatory Institutions and Perceptions of State Legitimacy: Evidence from a field experiment in Uzbekistan "
+---
+
+{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+chooseCRANmirror(ind = 69)
+install.packages("tidyverse")
+install.packages("dplyr")
+install.packages("DeclareDesign")
+install.packages("rdss")
+install.packages("scales")
+install.packages("svglite")
+install.packages("geomtextpath")
+install.packages("ggplot2")
+library(ggplot2)
+library(scales)
+library(rdss)
+library(tidyverse)
+library(DeclareDesign)
+library(dplyr)
+library(svglite)
+library(geomtextpath)
+
+{r, warning=FALSE, echo=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+declaration_1 <-
+  declare_model(
+    N = 100,
+    type = 
+      rep(c("Always-Taker", "Never-Taker", "Complier", "Defier"),
+          c(0.2, 0.2, 0.6, 0.0)*N),
+    U = rnorm(N),
+    # potential outcomes of Y with respect to D
+    potential_outcomes(
+      Y ~ case_when(
+        type == "Always-Taker" ~ -0.25 - 0.50 * D + U,
+        type == "Never-Taker" ~ 0.75 - 0.25 * D + U,
+        type == "Complier" ~ 0.25 + 0.50 * D + U,
+        type == "Defier" ~ -0.25 - 0.50 * D + U
+      ),
+      conditions = list(D = c(0, 1))
+    ),
+    # potential outcomes of D with respect to Z
+    potential_outcomes(
+      D ~ case_when(
+        Z == 1 & type %in% c("Always-Taker", "Complier") ~ 1,
+        Z == 1 & type %in% c("Never-Taker", "Defier") ~ 0,
+        Z == 0 & type %in% c("Never-Taker", "Complier") ~ 0,
+        Z == 0 & type %in% c("Always-Taker", "Defier") ~ 1
+      ),
+      conditions = list(Z = c(0, 1))
+    )
+  ) +
+  declare_inquiry(
+    ATE = mean(Y_D_1 - Y_D_0),
+    CACE = mean(Y_D_1[type == "Complier"] - Y_D_0[type == "Complier"])) +
+  declare_assignment(Z = conduct_ra(N = N)) +
+  declare_measurement(D = reveal_outcomes(D ~ Z),
+                      Y = reveal_outcomes(Y ~ D)) +
+  declare_estimator(
+    Y ~ D | Z,
+    .method = iv_robust,
+    inquiry = c("ATE", "CACE"),
+    label = "Two stage least squares"
+  ) +
+    declare_estimator(
+    Y ~ D,
+    .method = lm_robust,
+    inquiry = c("ATE", "CACE"),
+    label = "As treated"
+  ) 
+  
+diagnosis_1 <- diagnose_design(declaration_1)
+
+inquiries_df <-
+  diagnosis_1 |>
+  get_simulations() |>
+  filter(sim_ID == 1) |> 
+  mutate(estimator = factor(
+    estimator,
+    levels = c("Two stage least squares", "As treated")
+  ))
+label_df <-
+  inquiries_df |>
+  filter(estimator == "Two stage least squares") |> 
+  mutate(
+    x = c(-0.1, 0.8),
+    y = 0.075
+  )
+simulations_df <-
+  diagnosis_1 |>
+  get_simulations() |>
+  filter(inquiry == "ATE") |>
+  mutate(estimator = factor(
+    estimator,
+    levels = c("Two stage least squares", "As treated")
+  ))
+g <-
+  ggplot(simulations_df) +
+  aes(estimate) +
+  geom_histogram(
+    aes(y = ..count.. / sum(..count..)),
+    fill = dd_palette("dd_light_blue_alpha"),
+    color = "transparent",
+    binwidth = 0.15
+  ) +
+  geom_vline(data = inquiries_df,
+             aes(
+               xintercept = estimand,
+               color = inquiry,
+               linetype = inquiry
+             )) +
+  geom_text(data = label_df, aes(
+    x = x,
+    y = y,
+    label = inquiry,
+    color = inquiry
+  )) +
+  scale_color_manual(values = dd_palette("two_color_palette")) +
+  scale_y_continuous(labels = percent_format(accuracy = 1),
+                     breaks = seq(0, 0.1, 0.02)) +
+  facet_grid(estimator ~ .) +
+  theme_dd() + 
+  labs(x = "Simulated effect estimate",
+       y = "Percent of simulations")
+
+g
+ggsave("figure_1.pdf", g, width = 6.5, height = 6.5)
+ggsave("figure_1.svg", g, width = 6.5, height = 6.5)
+
+{r, warning = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+compliance_rate <- 0.2
+MI <-
+  declare_model(
+    N = 1000,
+    type = sample(x = c("Never-Taker", "Complier"), 
+                  size = N,
+                  prob = c(1 - compliance_rate, compliance_rate),
+                  replace = TRUE),
+    U = rnorm(N),
+    # potential outcomes of Y with respect to D
+    potential_outcomes(
+      Y ~ case_when(
+        type == "Never-Taker" ~ 0.75 - 0.25 * D + U,
+        type == "Complier" ~ 0.25 + 0.50 * D + U
+      ),
+      conditions = list(D = c(0, 1))
+    ),
+    # potential outcomes of D with respect to Z
+    potential_outcomes(
+      D ~ if_else(Z == 1 & type == "Complier", 1, 0),
+      conditions = list(Z = c(0, 1))
+    )
+  ) +
+  declare_inquiry(
+    CACE = mean(Y_D_1[type == "Complier"] - 
+                  Y_D_0[type == "Complier"])
+  )
+declaration_18.9_encouragement <-
+  MI +
+  declare_assignment(Z = complete_ra(N)) +
+  declare_measurement(D = reveal_outcomes(D ~ Z),
+                      Y = reveal_outcomes(Y ~ D)) +
+  declare_estimator(
+    Y ~ D | Z,
+    .method = iv_robust,
+    inquiry = "CACE",
+    label = "2SLS among all units"
+)
+diagnosands <- declare_diagnosands(power = mean(p.value <= 0.05))
+diagnosis <- 
+  diagnose_design(declaration_18.9_encouragement, 
+                  diagnosands = diagnosands)
+diagnosis
+declaration_18.9_placebo <-
+  MI +
+  declare_sampling(S = complete_rs(N, n = 500)) +
+  declare_assignment(Z = complete_ra(N)) +
+  declare_measurement(X = if_else(type == "Complier", 1, 0),
+                      D = reveal_outcomes(D ~ Z),
+                      Y = reveal_outcomes(Y ~ D)) +
+  declare_estimator(
+    Y ~ Z,
+    subset = X == 1,
+    .method = lm_robust,
+    inquiry = "CACE",
+    label = "OLS among compliers"
+  )
+diagnosis
+diagnosis_18.10_encouragment <- 
+  declaration_18.9_encouragement |> 
+  redesign(compliance_rate = seq(0.1, 0.9, by = 0.1)) |> 
+  diagnose_designs(sims = 1000,  # Number of simulations (500 iterations)
+  bootstrap_sims = TRUE  # Perform bootstrapping
+  )
+reshape_diagnosis(diagnosis_18.10_encouragment)
+tidy(diagnosis_18.10_encouragment)
+diagnosis_18.10_placebo <- 
+  declaration_18.9_placebo |> 
+  redesign(compliance_rate = seq(0.1, 0.9, by = 0.1)) |> 
+  diagnose_designs(sims = 1000,  # Number of simulations (500 iterations)
+  bootstrap_sims = TRUE  # Perform bootstrapping
+  )
+
+saveRDS(diagnosis_18.10_encouragment, file ="diagnosis_18.10_encouragment.rds")
+saveRDS(diagnosis_18.10_placebo, file ="diagnosis_18.10_placebo.rds")
+diagnosis_18.10_encouragment <- read_rds("diagnosis_18.10_encouragment.rds")
+diagnosis_18.10_placebo <- read_rds("diagnosis_18.10_placebo.rds")
+
+
+diagnosands_df <-
+  bind_rows(tidy(diagnosis_18.10_encouragment),
+            tidy(diagnosis_18.10_placebo)) |>
+  filter(diagnosand == "sd_estimate")
+
+label_df <-
+  tibble(
+    estimator = c("2SLS among all units", "OLS among compliers"),
+    label = c("Encouragement design", "Placebo-controlled design"),
+    offset = c(0.05, -0.03)
+  )
+
+gg_df <-
+  diagnosands_df |>
+  left_join(label_df) |>
+  mutate(y_offset = estimate + offset)
+
+g <-
+  ggplot(gg_df) +
+  aes(compliance_rate,
+      estimate,
+      color = estimator,
+      shape = estimator) +
+  geom_ribbon(aes(
+    ymin = conf.low,
+    ymax = conf.high,
+    fill = estimator,
+    color = NULL
+  ),
+  alpha = 0.1) +
+  geom_point() +
+  geom_line() +
+  geom_textpath(aes(y = y_offset, label = label), linewidth = 0) +
+  scale_color_manual(values = dd_palette("two_color_palette")) +
+  scale_fill_manual(values = dd_palette("two_color_palette")) +
+  theme_dd() +
+  labs(y = "Standard error", x = "Compliance rate")
+
+ggsave("figure_2.pdf",
+       g,
+       width = 6.5,
+       height = 5)
+ggsave("figure_2.svg",
+       g,
+       width = 6.5,
+       height = 5)
+
+
+```
+
+{r, warning=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+declaration_1 <-
+  declare_model(
+    N = 200,
+    type = 
+      rep(c("Always-Taker", "Never-Taker", "Complier", "Defier"),
+          c(0.2, 0.2, 0.6, 0.0)*N),
+    U = rnorm(N),
+    # potential outcomes of Y with respect to D
+    potential_outcomes(
+      Y ~ case_when(
+        type == "Always-Taker" ~ 0.25 - 0.50 * D + U,
+        type == "Never-Taker" ~ 0.75 - 0.25 * D + U,
+        type == "Complier" ~ 0.25 + 0.50 * D + U,
+        type == "Defier" ~ 0.25 - 0.50 * D + U
+      ),
+      conditions = list(D = c(0, 1))
+    ),
+    # potential outcomes of D with respect to Z
+    potential_outcomes(
+      D ~ case_when(
+        Z == 1 & type %in% c("Always-Taker", "Complier") ~ 1,
+        Z == 1 & type %in% c("Never-Taker", "Defier") ~ 0,
+        Z == 0 & type %in% c("Never-Taker", "Complier") ~ 0,
+        Z == 0 & type %in% c("Always-Taker", "Defier") ~ 1
+      ),
+      conditions = list(Z = c(0, 1))
+    )
+  ) +
+  declare_inquiry(
+   CACE = mean(Y_D_1[type == "Complier"] - Y_D_0[type == "Complier"])) +
+  declare_assignment(Z = conduct_ra(N = N)) +
+  declare_measurement(D = reveal_outcomes(D ~ Z),
+                      Y = reveal_outcomes(Y ~ D)) +
+  declare_estimator(
+    Y ~ D | Z,
+    .method = iv_robust,
+    inquiry = c("CACE"),
+    label = "Two stage least squares") 
+  
+diagnosis_1 <- declaration_1 |>
+  redesign(N = seq(100, 1000, 100)) |>
+  diagnose_designs()
+saveRDS(diagnosis_1, file = "diagnosis_1_file.rds")
+diagnosis_1 <-read_rds("diagnosis_1_file.rds")
+gg_df <- 
+  diagnosis_1 |>
+  get_simulations() |> 
+  filter(sim_ID < 500) |> 
+  mutate(significant = as.numeric(p.value <= 0.05))
+
+g <- 
+  ggplot(gg_df) + 
+  aes(N, significant) +
+  stat_smooth(method = 'loess', color = dd_palette("dd_dark_blue"), fill = dd_palette("dd_light_blue_alpha"), formula = 'y ~ x') +
+  geom_hline(yintercept = 0.8, color = dd_palette("dd_pink"), linetype = "dashed") +
+  geom_text(data = label_df, aes(label = label, x = x, y = y, color = color)) + 
+  scale_color_identity() + 
+  scale_y_continuous(breaks = seq(0, 1, 0.2)) +
+  theme_dd() +
+  theme(legend.position = "none") +
+  coord_cartesian(xlim = c(0, 1000)) + 
+  labs(x = "Data strategy parameter: sample size",
+       y = "Diagnosand: statistical power") 
+
+```
